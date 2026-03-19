@@ -17,6 +17,18 @@ export const DEFAULT_LSP_REQUEST_TIMEOUT_MS: number = (() => {
   return readPositiveIntEnv('OMC_LSP_TIMEOUT_MS', 15_000);
 })();
 
+export function getLspRequestTimeout(
+  serverConfig: Pick<LspServerConfig, 'initializeTimeoutMs'>,
+  method: string,
+  baseTimeout = DEFAULT_LSP_REQUEST_TIMEOUT_MS
+): number {
+  if (method === 'initialize' && serverConfig.initializeTimeoutMs) {
+    return Math.max(baseTimeout, serverConfig.initializeTimeoutMs);
+  }
+
+  return baseTimeout;
+}
+
 function readPositiveIntEnv(name: string, fallback: number): number {
   const env = process.env[name];
   if (!env) {
@@ -349,10 +361,12 @@ export class LspClient {
   /**
    * Send a request to the server
    */
-  private async request<T>(method: string, params: unknown, timeout = DEFAULT_LSP_REQUEST_TIMEOUT_MS): Promise<T> {
+  private async request<T>(method: string, params: unknown, timeout?: number): Promise<T> {
     if (!this.process?.stdin) {
       throw new Error('LSP server not connected');
     }
+
+    const effectiveTimeout = timeout ?? getLspRequestTimeout(this.serverConfig, method);
 
     const id = ++this.requestId;
     const request: JsonRpcRequest = {
@@ -368,8 +382,8 @@ export class LspClient {
     return new Promise((resolve, reject) => {
       const timeoutHandle = setTimeout(() => {
         this.pendingRequests.delete(id);
-        reject(new Error(`LSP request '${method}' timed out after ${timeout}ms`));
-      }, timeout);
+        reject(new Error(`LSP request '${method}' timed out after ${effectiveTimeout}ms`));
+      }, effectiveTimeout);
 
       this.pendingRequests.set(id, {
         resolve: resolve as (value: unknown) => void,
@@ -421,7 +435,7 @@ export class LspClient {
         }
       },
       initializationOptions: this.serverConfig.initializationOptions || {}
-    });
+    }, getLspRequestTimeout(this.serverConfig, 'initialize'));
 
     this.notify('initialized', {});
   }
